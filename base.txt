@@ -1,0 +1,312 @@
+// This is the C# code that will be ported... It comes from a project that's currently on indefinite hiatus.
+// It might be changed up a bit, to make it even more generic.
+// (For example, merging Variables, Flags and SessionFlags to a single Variable type, with a prefix to denote subtypes.)
+// Not 100% sure what I'll ultimately end up doing, though.
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Toffee
+{
+	public static class Parser
+	{
+		public class Token
+		{
+			public enum TokenType
+			{
+				Empty, Keyword, String, Number, Comment, Variable, Separator, NewLine, Label, Flag, Boolean, GeneralVar, SessionFlag
+			}
+
+			public Token()
+			{
+				Value = "";
+			}
+
+			public TokenType Type { get; set; }
+
+			public string Value { get; set; }
+
+			public int Line { get; set; }
+
+			public bool StartsLine { get; set; }
+
+
+			public override string ToString()
+			{
+				return $"{Type} {Value}";
+			}
+		}
+
+		public static List<Token> GetTokens(string script)
+		{
+			string[] perLine = script.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+			List<Token> tokens = new List<Token>();
+			bool didABad = false;
+			int currentLine = 1;
+			for (int i = 0; i < perLine.Length; i++)
+			{
+				string line = perLine[i];
+				while (line.Length > 0)
+				{
+					if (GetToken(ref line, out Token token))
+					{
+						token.Line = currentLine;
+						//if (token.Type == Token.TokenType.NewLine) currentLine++; // Unnecessary as we manually add a newline
+						if (tokens.Count == 0 || tokens.Last().Type == Token.TokenType.NewLine)
+						{
+							token.StartsLine = true;
+						}
+						tokens.Add(token);
+					}
+					else
+					{
+						didABad = true;
+						break;
+					}
+				}
+				if (didABad)
+				{
+					throw new Exception($"Error on line {i + 1}, character {perLine[i].Length - line.Length + 1}");
+					//Console.WriteLine($"Error on line {i + 1}, character {perLine[i].Length - line.Length + 1}");
+					//Console.ReadKey();
+					return null;
+				}
+				tokens.Add(new Token() { Type = Token.TokenType.NewLine, Line = currentLine });
+				currentLine++;
+			}
+			return tokens;
+		}
+
+		private static bool GetToken(ref string input, out Token token)
+		{
+			//trim whitespace and place to variable
+			input = input.Trim();
+			token = new Token();
+			if (input.Length < 1)
+			{
+				token.Type = Token.TokenType.Empty;
+				return true; //empty string
+			}
+			//if (inner[0] == ';') return true; //is comment
+			token = new Token();
+			if (('A' <= input[0] && input[0] <= 'Z') || ('a' <= input[0] && input[0] <= 'z') || (input[0] == '_'))
+			{
+				token.Type = Token.TokenType.Keyword;
+			}
+			else if ((input[0] == '"'))
+			{
+				token.Type = Token.TokenType.String;
+			}
+			else if (('0' <= input[0] && input[0] <= '9') || (input[0] == '.') || (input[0]=='-'))
+			{
+				token.Type = Token.TokenType.Number;
+			}
+			else if (input[0] == ';')
+			{
+				token.Type = Token.TokenType.Comment;
+			}
+			else if (input[0] == '$')
+			{
+				token.Type = Token.TokenType.Variable;
+			}
+			else if (input[0] == ',')
+			{
+				token.Type = Token.TokenType.Separator;
+			}
+			else if (input[0] == '@')
+			{
+				token.Type = Token.TokenType.Label;
+			}
+			else if (input[0] == '#')
+			{
+				token.Type = Token.TokenType.Flag;
+			}
+			else if (input[0] == '&')
+			{
+				token.Type = Token.TokenType.Boolean;
+			}
+			else if (input[0] == '%')
+			{
+				token.Type = Token.TokenType.SessionFlag;
+			}
+			else
+			{
+				return false;
+			}
+			int i = 0;
+			bool okay = true;
+			switch (token.Type)
+			{
+				case Token.TokenType.Keyword:
+					for (i = 0; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_'))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.String:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (input[i] == '"')
+						{
+							okay = true;
+							i++;
+							token.Value = token.Value.Replace(@"\n", "\n");
+							token.Value = token.Value.Replace(@"\nn", @"\n");
+							break;
+						}
+						else
+						{
+							token.Value += input[i];
+						}
+					}
+					break;
+				case Token.TokenType.Number:
+					bool hasDecimal = false;
+					bool hasNegate = false;
+					for (i = 0; i < input.Length; i++)
+					{
+						if (('0' <= input[i] && input[i] <= '9') || (input[i] == '.' && !hasDecimal) || (input[i] == '-' && !hasNegate))
+						{
+							token.Value += input[i];
+							if (input[i] == '.') hasDecimal = true;
+							if (input[i] == '-') hasNegate = true;
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.Variable:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_') || ('0' <= input[i] && input[i] <= '9' && i > 1))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.Comment:
+					token.Value = input.Remove(0, 1);
+					input = "";
+					break;
+				case Token.TokenType.Separator:
+					i = 1;
+					break;
+				case Token.TokenType.Label:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_') || ('0' <= input[i] && input[i] <= '9' && i > 1))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.Flag:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_') || ('0' <= input[i] && input[i] <= '9' && i > 1))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.Boolean:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_') || ('0' <= input[i] && input[i] <= '9' && i > 1))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				case Token.TokenType.SessionFlag:
+					for (i = 1; i < input.Length; i++)
+					{
+						if (('A' <= input[i] && input[i] <= 'Z') || ('a' <= input[i] && input[i] <= 'z') || (input[i] == '_') || ('0' <= input[i] && input[i] <= '9' && i > 1))
+						{
+							token.Value += input[i];
+						}
+						else if (input[i] == ' ' || input[i] == ',')
+						{
+							okay = true;
+							break;
+						}
+						else
+						{
+							okay = false;
+							break;
+						}
+					}
+					break;
+				default:
+					break;
+			}
+			input = input.Remove(0, i);
+			return okay;
+		}
+	}
+}
